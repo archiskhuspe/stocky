@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
+	"github.com/sirupsen/logrus"
 	"stocky/internal/repository"
 )
 
@@ -84,6 +85,7 @@ func (s *PortfolioService) GetHistoricalINR(ctx context.Context, userID uuid.UUI
 
 		sharesByStock, err := s.rewardRepo.GetTotalSharesByStockUpToDate(ctx, userID, endOfDay)
 		if err != nil {
+			logrus.WithError(err).WithField("date", date.Format("2006-01-02")).Warn("Failed to fetch shares for date; skipping")
 			continue
 		}
 
@@ -97,6 +99,7 @@ func (s *PortfolioService) GetHistoricalINR(ctx context.Context, userID uuid.UUI
 			if err != nil {
 				latestPrice, err := s.priceRepo.GetLatest(ctx, stock)
 				if err != nil {
+					logrus.WithError(err).WithFields(logrus.Fields{"stock": stock, "date": date.Format("2006-01-02")}).Warn("No price available for stock; skipping")
 					continue
 				}
 				totalValue = totalValue.Add(latestPrice.Price.Mul(qty))

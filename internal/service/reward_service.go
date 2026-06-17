@@ -115,8 +115,8 @@ func (s *RewardService) ProcessReward(ctx context.Context, req RewardRequest) er
 			EventID:   req.EventID,
 			EntryType: models.LedgerEntryTypeFee,
 			Symbol:    nil,
-			Debit:     totalFees,
-			Credit:    decimal.Zero,
+			Debit:     decimal.Zero,
+			Credit:    totalFees,
 			CreatedAt: time.Now(),
 		},
 	}

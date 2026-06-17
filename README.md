@@ -1,261 +1,283 @@
-# Stocky: A Portfolio Service by Archis Khuspe
+# Stock Rewards Portfolio Service
 
-A production-grade backend service for managing stock rewards, built with Go, Gin, and PostgreSQL.
+![Go](https://img.shields.io/badge/Go-1.21-00ADD8?logo=go&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-12%2B-336791?logo=postgresql&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green)
 
-## Architecture
+A Go REST API for managing employee stock rewards with double-entry ledger accounting, idempotent event processing, and Indian-market fee calculations.
 
-### Layered Architecture
+---
 
-- **Handler Layer**: HTTP request/response handling, validation
-- **Service Layer**: Business logic, orchestration
-- **Repository Layer**: Database access abstraction
-- **Model Layer**: Domain entities
+## Table of Contents
 
-### Key Components
+- [Features](#features)
+- [Tech Stack](#tech-stack)
+- [How It Works](#how-it-works)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [Project Structure](#project-structure)
+- [Limitations](#limitations)
+- [License](#license)
 
-1. **Double-Entry Accounting**: All transactions are recorded in a ledger with balanced debits and credits
-2. **Idempotency**: Reward events use `event_id` for idempotent processing
-3. **Price Service**: Hourly background job fetches and stores stock prices
-4. **Decimal Precision**: Uses `shopspring/decimal` for accurate financial calculations
+---
 
-## Database Schema
+## Features
 
-### Tables
+- **Double-entry accounting** — every reward creates three balanced ledger entries (STOCK credit, CASH debit, FEE credit); an imbalance check runs before each commit
+- **Idempotent reward processing** — duplicate `event_id` submissions are detected and silently ignored
+- **Indian-market fee calculation** — brokerage (0.03%, min 20 INR), STT (0.025%), GST (18% on brokerage), exchange charges (0.00325%), SEBI charges (0.0001%), stamp duty (0.003%)
+- **Background price fetcher** — runs on a configurable interval (default 1 h), stores prices per symbol in PostgreSQL
+- **Historical portfolio valuation** — returns INR value for each of the last 30 days, falling back to the latest known price when historical data is unavailable
+- **Graceful shutdown** — handles SIGINT/SIGTERM cleanly
 
-- `users`: User records
-- `reward_events`: Reward transactions with idempotency
-- `ledger_entries`: Double-entry accounting records
-- `stock_prices`: Latest stock prices with timestamps
+---
 
-### Ledger Logic
+## Tech Stack
 
-Every reward creates three ledger entries:
+| Layer | Technology |
+|-------|-----------|
+| Language | Go 1.21 |
+| HTTP framework | Gin |
+| Database | PostgreSQL 12+ |
+| SQL client | sqlx + lib/pq |
+| Decimal arithmetic | shopspring/decimal |
+| Logging | logrus (JSON) |
+| UUIDs | google/uuid |
+| Config | godotenv |
 
-1. **Credit STOCK**: Increases stock inventory asset
-2. **Debit CASH**: Decreases cash asset
-3. **Debit FEE**: Records transaction fees
+---
 
-The ledger always balances: Total Debit = Total Credit
+## How It Works
 
-## API Endpoints
+### Architecture
 
-### 1. POST /api/v1/reward
-
-Record a stock reward for a user.
-
-**Request:**
-
-```json
-{
-  "user_id": "550e8400-e29b-41d4-a716-446655440000",
-  "stock_symbol": "RELIANCE",
-  "quantity": 1.25,
-  "timestamp": "2025-01-15T10:30:00Z",
-  "event_id": "660e8400-e29b-41d4-a716-446655440000"
-}
+```
+cmd/server/main.go
+    └── handler (HTTP request/response)
+        └── service (business logic)
+            └── repository (database access)
+                └── models (domain types)
 ```
 
-**Response:** 201 Created
+### Ledger logic
 
-```json
-{
-  "message": "Reward processed successfully",
-  "event_id": "660e8400-e29b-41d4-a716-446655440000"
-}
+Every `POST /api/v1/reward` creates three ledger entries inside a single database transaction:
+
+| Entry | Type | Debit | Credit |
+|-------|------|-------|--------|
+| Stock acquired | STOCK | — | price × quantity |
+| Cash out | CASH | price × quantity + fees | — |
+| Fees collected | FEE | — | total fees |
+
+`Total Debit = Total Credit` is verified before committing; a mismatch rolls back the transaction.
+
+### Fee calculation
+
+Computed in [`pkg/fees/calculator.go`](pkg/fees/calculator.go):
+
+```
+Brokerage   = max(transaction_value × 0.03%, 20 INR)
+STT         = transaction_value × 0.025%
+GST         = brokerage × 18%
+Exchange    = transaction_value × 0.00325%
+SEBI        = transaction_value × 0.0001%
+Stamp duty  = transaction_value × 0.003%
+Total fees  = sum of all above
 ```
 
-### 2. GET /api/v1/today-stocks/{userId}
+---
 
-Get all stock rewards for today (IST).
-
-**Response:** 200 OK
-
-```json
-[
-  {
-    "stock_symbol": "RELIANCE",
-    "quantity": 1.25,
-    "timestamp": "2025-01-15T10:30:00Z",
-    "event_id": "660e8400-e29b-41d4-a716-446655440000"
-  }
-]
-```
-
-### 3. GET /api/v1/historical-inr/{userId}
-
-Get INR valuation for each past day (up to yesterday).
-
-**Response:** 200 OK
-
-```json
-[
-  {
-    "date": "2025-01-14",
-    "inr_value": 15432.25
-  },
-  {
-    "date": "2025-01-15",
-    "inr_value": 16211.9
-  }
-]
-```
-
-### 4. GET /api/v1/stats/{userId}
-
-Get today's shares and current portfolio value.
-
-**Response:** 200 OK
-
-```json
-{
-  "today_shares_by_stock": {
-    "RELIANCE": 1.25,
-    "TCS": 0.5
-  },
-  "current_portfolio_value": 4375.0
-}
-```
-
-### 5. GET /api/v1/portfolio/{userId}
-
-Get detailed portfolio holdings.
-
-**Response:** 200 OK
-
-```json
-[
-  {
-    "stock_symbol": "RELIANCE",
-    "total_quantity": 1.25,
-    "current_price": 2500.0,
-    "current_value": 3125.0
-  }
-]
-```
-
-## Setup
-
-### Prerequisites
+## Prerequisites
 
 - Go 1.21+
 - PostgreSQL 12+
-- Make (optional)
+- `make` (optional, for convenience commands)
 
-### Installation
+---
 
-1. Clone the repository
+## Installation
 
 ```bash
+# 1. Clone
 git clone <repo-url>
-cd project
-```
+cd stock-rewards-portfolio-service
 
-2. Install dependencies
+# 2. Generate go.sum and download dependencies
+go mod tidy
 
-```bash
-go mod download
-```
-
-3. Setup database
-
-```bash
+# 3. Create and migrate the database
 createdb assignment
 psql assignment < migrations/001_initial_schema.sql
-```
 
-4. Configure environment
-
-```bash
-cp .env.example .env
+# 4. Configure environment
+cp env.example .env
 # Edit .env with your database credentials
-```
 
-5. Run the server
-
-```bash
+# 5. Run
 go run cmd/server/main.go
 ```
 
-## Edge Cases Handled
-
-### 1. Idempotency
-
-- Duplicate `event_id` requests are ignored
-- Returns success without creating duplicate records
-
-### 2. Price API Downtime
-
-- Uses last known price with warning log
-- Background job retries on next interval
-
-### 3. Rounding Errors
-
-- Uses banker's rounding (Round method from decimal library)
-- All calculations use NUMERIC type in PostgreSQL
-
-### 4. Stock Splits/Mergers
-
-- Schema supports symbol updates
-- Historical prices preserved for audit
-
-### 5. Delisted Stocks
-
-- Can mark stocks inactive (extensible design)
-- Frozen prices prevent valuation errors
-
-### 6. Reward Reversal
-
-- Can create negative ledger entries
-- Maintains double-entry balance
-
-## Fee Calculation
-
-Fees include:
-
-- Brokerage: 0.03% (min 20 INR)
-- STT: 0.025% on delivery
-- GST: 18% on brokerage
-- Exchange charges: 0.00325%
-- SEBI charges: 0.0001%
-- Stamp duty: 0.003%
-
-Total fees are calculated internally and debited separately in the ledger.
-
-## Background Jobs
-
-### Price Fetcher
-
-- Runs hourly (configurable via `PRICE_FETCH_INTERVAL`)
-- Fetches prices for all tracked stocks
-- Updates `stock_prices` table
-- Handles API failures gracefully
-
-## Testing
+Or using `make`:
 
 ```bash
-# Run tests
-go test ./...
-
-# With coverage
-go test -cover ./...
+make setup    # go mod download
+make migrate  # run migrations
+make run      # start the server
 ```
 
-## Logging
+---
 
-Uses `logrus` with JSON formatting. Logs include:
+## Configuration
 
-- Request/response details
-- Business events (rewards, price updates)
-- Errors with context
+Copy `env.example` to `.env` and set values:
 
-## Production Considerations
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8080` | HTTP listen port |
+| `GIN_MODE` | `release` | Gin mode (`debug` / `release`) |
+| `DB_HOST` | `localhost` | PostgreSQL host |
+| `DB_PORT` | `5432` | PostgreSQL port |
+| `DB_USER` | `postgres` | Database user |
+| `DB_PASSWORD` | `postgres` | Database password |
+| `DB_NAME` | `assignment` | Database name |
+| `DB_SSLMODE` | `disable` | SSL mode |
+| `PRICE_API_URL` | — | Reserved for a future real price API |
+| `PRICE_FETCH_INTERVAL` | `1h` | How often the price fetcher runs |
 
-1. **Database Connection Pooling**: Configured via sqlx
-2. **Transaction Management**: All reward processing uses transactions
-3. **Error Handling**: Comprehensive error messages with proper HTTP status codes
-4. **Graceful Shutdown**: Handles SIGINT/SIGTERM
-5. **Health Checks**: `/health` endpoint for monitoring
+---
+
+## Usage
+
+### Health check
+
+```
+GET /health
+```
+
+```json
+{"status": "ok"}
+```
+
+### Record a stock reward
+
+```
+POST /api/v1/reward
+Content-Type: application/json
+
+{
+  "user_id":      "550e8400-e29b-41d4-a716-446655440000",
+  "stock_symbol": "RELIANCE",
+  "quantity":     1.25,
+  "timestamp":    "2025-01-15T10:30:00Z",
+  "event_id":     "660e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+**201 Created**
+```json
+{"message": "Reward processed successfully", "event_id": "660e8400-..."}
+```
+
+Submitting the same `event_id` again returns 200 without creating a duplicate.
+
+### Get today's rewards (IST)
+
+```
+GET /api/v1/today-stocks/{userId}
+```
+
+```json
+[
+  {"stock_symbol": "RELIANCE", "quantity": 1.25, "timestamp": "...", "event_id": "..."}
+]
+```
+
+### Get 30-day historical INR valuation
+
+```
+GET /api/v1/historical-inr/{userId}
+```
+
+```json
+[
+  {"date": "2025-01-14", "inr_value": 15432.25},
+  {"date": "2025-01-15", "inr_value": 16211.90}
+]
+```
+
+### Get today's stats
+
+```
+GET /api/v1/stats/{userId}
+```
+
+```json
+{
+  "today_shares_by_stock":    {"RELIANCE": 1.25, "TCS": 0.5},
+  "current_portfolio_value":  4375.00
+}
+```
+
+### Get full portfolio holdings
+
+```
+GET /api/v1/portfolio/{userId}
+```
+
+```json
+[
+  {"stock_symbol": "RELIANCE", "total_quantity": 1.25, "current_price": 2500.00, "current_value": 3125.00}
+]
+```
+
+A ready-to-import Postman collection is included at [`postman_collection.json`](postman_collection.json).
+
+---
+
+## Project Structure
+
+```
+stock-rewards-portfolio-service/
+├── cmd/server/
+│   └── main.go                     # entrypoint, router setup, graceful shutdown
+├── internal/
+│   ├── config/config.go            # env var loading
+│   ├── database/postgres.go        # sqlx connection
+│   ├── handler/
+│   │   ├── portfolio_handler.go    # GET endpoints
+│   │   └── reward_handler.go       # POST /reward
+│   ├── middleware/logger.go        # request logging
+│   ├── models/                     # domain types (reward, ledger, stock_price, user)
+│   ├── repository/                 # database queries (one file per model)
+│   ├── scheduler/price_fetcher.go  # background job
+│   └── service/
+│       ├── portfolio_service.go    # holdings & historical valuation
+│       ├── price_service.go        # mock price generation
+│       └── reward_service.go       # reward processing & ledger writes
+├── migrations/
+│   └── 001_initial_schema.sql      # tables, indexes, ledger audit function
+├── pkg/fees/
+│   └── calculator.go               # Indian-market fee formulas
+├── env.example
+├── Makefile
+└── postman_collection.json
+```
+
+---
+
+## Limitations
+
+- **Mock price data** — the price service generates synthetic prices with ±5% random variation for five hardcoded symbols (RELIANCE, TCS, INFY, HDFCBANK, ICICIBANK). The `PRICE_API_URL` config key is loaded but no real market API is called; integrating a live feed is future work.
+- **No authentication** — all API endpoints are publicly accessible; no API key, JWT, or session mechanism is implemented.
+- **Fixed symbol set** — only the five symbols seeded in the price service can be used; rewards for other symbols will fail to find a price.
+- **Manual migrations** — there is no migration-runner tool (e.g., golang-migrate); apply `migrations/001_initial_schema.sql` by hand with `psql`.
+- **No `go.sum`** — the checksum file is absent from the repository. Run `go mod tidy` before building to generate it.
+- **No tests** — no unit or integration tests are included in the current codebase.
+
+---
 
 ## License
 
-MIT
+Released under the [MIT License](LICENSE).

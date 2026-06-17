@@ -1,0 +1,22 @@
+# Binaries
+/bin/
+/dist/
+*.exe
+*.out
+
+# Environment
+.env
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Go
+vendor/
+*.test
+*.prof
