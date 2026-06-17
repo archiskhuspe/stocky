@@ -1,10 +1,10 @@
-# Stock Rewards Portfolio Service
+# Stocky — Stock Rewards Portfolio Service
 
 ![Go](https://img.shields.io/badge/Go-1.21-00ADD8?logo=go&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-12%2B-336791?logo=postgresql&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-A Go REST API for managing employee stock rewards with double-entry ledger accounting, idempotent event processing, and Indian-market fee calculations.
+Stocky is a Go REST API for managing employee stock rewards with double-entry ledger accounting, idempotent event processing, and Indian-market fee calculations.
 
 ---
 
